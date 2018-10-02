@@ -2,8 +2,7 @@ from frozenlakegame import frozenlakegame
 from network import Network
 import matplotlib.pyplot as plt
 import numpy as np
-import time
-
+import tensorflow as tf
 
 if __name__ == "__main__":
 
@@ -11,10 +10,13 @@ if __name__ == "__main__":
     
     env = frozenlakegame(R=-0.01)  # Instantiate the environment
 
-    PG = Network() # Instantiate the Neural Network
+    PG = Network(
+        learning_rate=0.0025,
+        reward_decay=0.95
+    ) # Instantiate the Neural Network
     
     RENDER_ENV = False
-    num_episodes = 100000
+    num_episodes = 250000
     max_steps = 40
     wins = 0
 
@@ -27,7 +29,7 @@ if __name__ == "__main__":
                 env.show()
 
             # 1. Choose an action based on observation
-            action = PG.choose_action(state, steps / max_steps)
+            action = PG.choose_action(state)
 
             # 2. Take action in the environment
             new_state, reward = env.step(action)
@@ -40,10 +42,10 @@ if __name__ == "__main__":
                 discounted_episode_rewards_norm = PG.learn()
                 if reward == 1:
                     wins += 1
-                if episode != 0 and episode % 100 == 0:
+                if episode != 0 and episode % 500 == 0:
                     print("{e:d}\t{r:1.4f}".format(e=episode, r=wins/(episode + 1)))
                 break
-            elif episode % 100 == 0 and steps == max_steps - 1:
+            elif episode % 500 == 0 and steps == max_steps - 1:
                 discounted_episode_rewards_norm = PG.learn()
                 print("{e:d}\t{r:1.4f}".format(e=episode, r=wins/(episode + 1)))
             steps += 1
