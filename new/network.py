@@ -13,7 +13,9 @@ class Network:
     def __init__(
         self,
         learning_rate=0.01,
-        reward_decay=0.95
+        reward_decay=0.95,
+        load_path=None,
+        save_path=None
     ):
         
         self.lr = learning_rate
@@ -21,10 +23,28 @@ class Network:
         self.episode_state = []
         self.episode_actions = []
         self.episode_rewards = []
+
+        self.save_path = None
+        if save_path is not None:
+            self.save_path = save_path
+
         self.build_network()
         self.sess = tf.Session()
         self.sess.run(tf.global_variables_initializer())
 
+
+        # 'Saver' op to save and restore all the variables
+        self.saver = tf.train.Saver()
+
+        # Restore model
+        if load_path is not None:
+            self.load_path = load_path
+            self.saver.restore(self.sess, self.load_path)            
+    
+    def clear_transitions(self):
+        self.episode_state = []
+        self.episode_rewards = []
+        self.episode_actions = []
 
     def store_transition(self, s, a, r):
         
@@ -41,65 +61,31 @@ class Network:
         in one specific action, then the choice will naturally become less random
         '''
         state = state[np.newaxis, :]
-        action_to_choose = self.sess.run(self.action_to_choose, feed_dict = {self.X: state})
-        return action_to_choose
-
+        actions = self.sess.run(self.outputs_softmax, feed_dict = {self.X: state})
+        #if np.random.randint(1, 101) > 80:
+        #    return np.random.randint(0, 4)
+        #return np.random.choice(range(len(actions.ravel())), p=actions.ravel())
         
+        #print(actions)
+        #return np.argmax(actions[0])
+        return np.random.choice(range(actions.shape[1]), p=actions.ravel())
 
-
-
-    def learn(self):
+    def learn(self, milestone=False):
         total_reward = self.discount_and_normalise_rewards()
-        
-
+        #print(self.episode_actions)
         # Train on episode
-
-        '''
-
-        HAVING a look!
-        
-        indices = self.sess.run(self.indices, feed_dict={
-             self.X: self.episode_state, 
-             self.Y: self.episode_actions,
-             self.total_reward: total_reward
-        })
-        print("action indices")
-        print(indices)
-        print("")
-        action_sample = self.sess.run(self.action_sample, feed_dict={
-             self.X: self.episode_state, 
-             self.Y: self.episode_actions,
-             self.total_reward: total_reward
-        })
-        print("action sample")
-        print(action_sample)
-        print("")
-        action_to_choose = self.sess.run(self.action_to_choose, feed_dict={
-             self.X: self.episode_state, 
-             self.Y: self.episode_actions,
-             self.total_reward: total_reward
-        })
-        print("action to choose")
-        print(action_to_choose)
-        print("")
-        
-        action_prob = self.sess.run(self.act_prob, feed_dict={
-             self.X: self.episode_state, 
-             self.Y: self.episode_actions,
-             self.total_reward: total_reward
-        })
-        print("action prob")
-        print(action_prob)
-        print("\n\n")        
-        #'''
         self.sess.run(self.train_op, feed_dict={
              self.X: self.episode_state, 
              self.Y: self.episode_actions,
              self.total_reward: total_reward
         })
-        
+
         # Reset the episode data
         self.episode_state, self.episode_actions, self.episode_rewards  = [], [], []
+
+        # Save checkpoint
+        if milestone == True and self.save_path is not None:
+            save_path = self.saver.save(self.sess, self.save_path)
         return total_reward
 
     '''
@@ -116,16 +102,15 @@ class Network:
 
         # Standard deviations are equal to zero, return zeros
         # we won't learn anything from this
+        return rewards
+        
         if np.std(rewards) == 0:
-            return [0] * len(self.episode_rewards)
+            return np.zeros_like(self.episode_rewards)
         
         # Normalise by discounting the mean
-        norm_mean, norm_variance = tf.nn.moments(tf.constant(rewards, dtype=tf.float32), axes=None)
-        rewards -= norm_mean
-        rewards /= tf.sqrt(norm_variance)
+        rewards -= np.mean(rewards)
         # Divide all rewards by standard deviation
-
-        return self.sess.run(rewards)
+        return rewards / np.std(rewards)
 
     
     def build_network(self):
@@ -134,7 +119,6 @@ class Network:
             self.Y = tf.placeholder(tf.int32, [None, ], name="Y")
             self.total_reward = tf.placeholder(tf.float32, [None, ], name="reward")
 
-
         conv1 = tf.layers.conv2d(
             inputs = self.X,
             filters = 16,
@@ -142,6 +126,9 @@ class Network:
             strides = 1,
             padding = 'same', # this will keep it as a 4 * 4 grid
             activation = tf.nn.relu,
+            kernel_initializer = tf.random_normal_initializer(mean=0, stddev=0.3),
+            bias_initializer = tf.constant_initializer(0.1),
+            
             name='conv1')   
         
         conv2 = tf.layers.conv2d(
@@ -149,8 +136,10 @@ class Network:
             filters = 16,
             kernel_size = [2, 2],
             strides = 1,
-            padding = 'valid', # This will reduce it to a 3 * 3 grid
+            padding = 'same', # This will reduce it to a 3 * 3 grid
             activation = tf.nn.relu,
+            kernel_initializer = tf.random_normal_initializer(mean=0, stddev=0.3),
+            bias_initializer = tf.constant_initializer(0.1),
             name='conv2')
         
         flat_convs = tf.layers.flatten(
@@ -160,31 +149,28 @@ class Network:
         dense = tf.layers.dense(
             inputs = flat_convs, 
             units = 32, 
-            activation = tf.nn.relu,
+            activation = tf.nn.tanh,
+            kernel_initializer = tf.random_normal_initializer(mean=0, stddev=0.3),
+            bias_initializer = tf.constant_initializer(0.1),
             name = 'fc'
         )    
-        logits = tf.layers.dense(
+        self.logits = tf.layers.dense(
             inputs = dense,
             units = 4, 
+            kernel_initializer = tf.random_normal_initializer(mean=0, stddev=0.3),
+            bias_initializer = tf.constant_initializer(0.1),
             name='logits')
 
         # Softmax outputs
-        outputs_softmax = tf.nn.softmax(logits=logits, name='action_probabilities')
+        self.outputs_softmax = tf.nn.softmax(logits=self.logits, name='action_probabilities')
         
-        # Action to choose 
-        self.action_sample = tf.multinomial(tf.log(outputs_softmax), 1)
-        self.action_to_choose = tf.cast(self.action_sample[0][0], tf.int32)
+        with tf.name_scope('loss'): 
 
-        with tf.name_scope('loss'):
-            '''
-            self.indices = tf.range(0, tf.shape(outputs_softmax)[0]) * tf.shape(outputs_softmax)[1] + self.Y
-            self.act_prob = tf.gather(tf.reshape(outputs_softmax, [-1]), self.indices)
-        
-            # surrogate loss
-            loss = tf.reduce_sum(tf.multiply(self.act_prob, self.total_reward))
-            '''
-            neg_log_prob = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=self.Y)
-            loss = tf.reduce_sum(tf.multiply(neg_log_prob, self.total_reward))
+            # This is the standard type of loss function, that I couldn't get to perform well
+            cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.Y, logits=self.logits, name="cross_entropy")
+            loss = tf.reduce_mean(cross_entropy / - self.total_reward)
+            
 
+             
         with tf.name_scope('train'):
-            self.train_op = tf.train.RMSPropOptimizer(self.lr).minimize(loss)    
+            self.train_op = tf.train.AdamOptimizer(self.lr).minimize(loss)    
